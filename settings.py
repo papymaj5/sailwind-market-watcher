@@ -3,10 +3,23 @@
 import json
 import math
 import os
+import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 APP_DIR = Path(__file__).resolve().parent
+
+
+def read_app_version(path):
+    try:
+        metadata = path.read_text(encoding="utf-8")
+    except OSError:
+        return "unknown"
+    version = re.search(r'^version\s*=\s*"([^"]+)"', metadata, re.MULTILINE)
+    return version[1] if version else "unknown"
+
+
+APP_VERSION = read_app_version(APP_DIR / "pyproject.toml")
 with (APP_DIR / "config.json").open(encoding="utf-8") as file:
     CONFIG = json.load(file)
 

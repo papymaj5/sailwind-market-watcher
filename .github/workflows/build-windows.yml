@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - "**"
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -23,17 +26,33 @@ jobs:
           python-version: "3.12"
           architecture: x64
 
+      - name: Install check tools
+        run: python -m pip install ruff pip-audit
+
+      - name: Lint and scan source
+        run: python -m ruff check .
+
+      - name: Check source formatting
+        run: python -m ruff format --check .
+
+      - name: Create isolated build environment
+        run: python -m venv .venv
+
       - name: Install build dependencies
-        run: python -m pip install -r requirements.txt "pyinstaller>=6,<7"
+        run: .venv/Scripts/python.exe -m pip install --upgrade pip -r requirements.txt "pyinstaller>=6,<7"
+
+      - name: Check build dependencies for known vulnerabilities
+        run: python -m pip_audit --strict --path .venv/Lib/site-packages
 
       - name: Run tests
-        run: python -m unittest discover -s tests -v
+        run: .venv/Scripts/python.exe -m unittest discover -s tests -v
 
       - name: Package Market Watcher
         run: >-
-          python -m PyInstaller --noconfirm --onefile --console
+          .venv/Scripts/python.exe -m PyInstaller --noconfirm --onefile --console
           --name SailwindMarketWatcher --icon boat.ico
-          --add-data "boat.ico:." --add-data "config.json:." main.py
+          --add-data "boat.ico:." --add-data "config.json:."
+          --add-data "pyproject.toml:." main.py
 
       - name: Check the packaged app starts without Sailwind installed
         shell: pwsh

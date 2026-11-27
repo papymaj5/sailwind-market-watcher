@@ -12,13 +12,12 @@ This tool connects to your running game, reads market data directly from memory,
 
 1. Launch Sailwind
 2. Once in-game, double-click **Launch Market Watcher.bat**
-3. Click "Scan For Markets" in the GUI
-4. Enter your player values:
+3. Click **Initialize Markets** once per game session
+4. Open **Settings** to enter your player values:
    - Currency exchange rate
    - Cargo limits (mass/volume)
    - Available money
-   - Minimum profit
-5. Select your start and destination island groups
+5. In **Trade Routes**, open **Filters** to set island groups and minimum profit
 6. Browse the trade table for top opportunities!
 
 ### Read the Port Market
@@ -48,9 +47,32 @@ are totals for those 5 crates. The budget, cargo limits, and minimum profit
 filter apply to this tab.
 
 Choose a specific **Departure port** to plan trades from that port. Choose
-**Selected start groups** to browse departures by region. **End Groups**
-controls which destinations the route table considers. Click **Update Values**
-to apply and save your player inputs.
+**Selected start groups** to browse departures by region. Open **Filters** on
+the Trade Routes tab to change **End Groups** or **Min Profit**. Open
+**Settings** in the toolbar to change cash, exchange rate, or cargo limits,
+then click **Update Values** to apply and save them.
+
+### Plan a mixed cargo load
+
+Choose a **Departure port**, open **Cargo Plan**, and pick one destination.
+The planner suggests a mix of goods within your available money, weight, and
+cargo volume, and shows estimated totals for the load. It considers profitable
+crates even if the **Trade Routes** minimum profit filter would hide them.
+
+The watcher estimates each crate separately. Buying reduces supply at the
+departure port and selling adds supply at the destination. The planner weighs
+each additional crate's estimated profit against the budget and space it uses.
+The suggested load is a heuristic, so another mix can sometimes earn more.
+
+**Initialize Markets** locates the markets. The watcher then rereads supply
+about every five seconds. When you sail to another port, just change
+**Departure port**. If you restart Sailwind, restart the watcher and initialize
+the markets again.
+
+The scan area shows how many markets loaded and the time of the last successful
+refresh. If a market becomes unreadable, the watcher leaves it out of trade
+estimates and retries it on the next refresh. Use **Diagnostics → Copy diagnostics** to copy
+the latest scan timings, readable market count, and read errors for a bug report.
 
 ---
 
@@ -108,6 +130,18 @@ console reports separate timings for region queries, memory reads, signature
 matching, and market loading.
 
 See [CHANGELOG.md](CHANGELOG.md) for changes in progress and release history.
+
+### Build and security checks
+
+GitHub Actions runs Ruff's Python security rules, audits the installed Windows
+build dependencies with pip-audit, runs the regression suite, and smoke-tests
+the packaged executable. These checks run on branch pushes and pull requests
+to main. Release publishing waits for a successful build.
+
+Market Watcher requests Windows process read and query access to Sailwind.
+The checks follow parts of the
+[NIST Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final),
+including source analysis, dependency review, and testing the executable.
 
 ---
 
