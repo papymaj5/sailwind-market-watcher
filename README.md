@@ -1,4 +1,4 @@
-# ⛵ Sailwind Market Watcher for 0.33.2
+# ⛵ Sailwind Market Watcher
 [![Windows build](https://github.com/papymaj5/sailwind-market-watcher/actions/workflows/build-windows.yml/badge.svg?branch=main&event=push)](https://github.com/papymaj5/sailwind-market-watcher/actions/workflows/build-windows.yml)
 ![Market Finder GUI](MarketFinder.png)
 
@@ -184,7 +184,7 @@ Use the actual in-game rate when possible for best results.
 
 - Windows OS
 - Python 3.9+
-- The game [**Sailwind**](https://store.steampowered.com/app/1284190/Sailwind)[ on Steam](https://store.steampowered.com/app/1284190/Sailwind) Version 0.32
+- [**Sailwind** on Steam](https://store.steampowered.com/app/1764530/Sailwind) version 0.41
 - Python dependencies:
   - `pymem`
   - `pillow`

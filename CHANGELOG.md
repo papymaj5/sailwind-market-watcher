@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [v1.4.0]
+
 ### Added
 
 - Show the app version in the bottom-right footer.
