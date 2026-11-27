@@ -1,4 +1,5 @@
 # ⛵ Sailwind Market Watcher for 0.33.2
+[![Windows build](https://github.com/papymaj5/sailwind-market-watcher/actions/workflows/build-windows.yml/badge.svg?branch=main&event=push)](https://github.com/papymaj5/sailwind-market-watcher/actions/workflows/build-windows.yml)
 ![Market Finder GUI](MarketFinder.png)
 
 A real-time market and trade route analyzer for the open-world sailing game **Sailwind**.
@@ -157,7 +158,15 @@ Use the actual in-game rate when possible for best results.
 
 ### Standalone Windows executable
 
-Once the build workflow is on the repository's default branch, open **Actions → Build Windows executable → Run workflow**. When it finishes, open the run and download **SailwindMarketWatcher-Windows-x64** from **Artifacts**. Extract the ZIP, load your Sailwind save, and double-click `SailwindMarketWatcher.exe`. The executable bundles Python and the app dependencies.
+Download **SailwindMarketWatcher-Windows-x64.zip** from [Releases](https://github.com/papymaj5/sailwind-market-watcher/releases). Extract it, load your Sailwind save, and double-click `SailwindMarketWatcher.exe`. The executable bundles Python and the app dependencies.
+
+Every branch push runs the tests and builds the executable. Pushes to branches
+such as `dev` publish prereleases. A push to `main`, including a merged pull
+request, publishes a stable release and creates a tag from the version in
+`pyproject.toml`. Bump that version before merging the next stable release.
+If the release already exists, the new build is still available in the run's
+**Artifacts**. Manual runs from **Actions → Build Windows executable → Run workflow**
+produce artifacts without publishing a release.
 
 ### Python launcher
 

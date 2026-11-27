@@ -5,7 +5,7 @@
 ### Added
 
 - Add a double-click Windows launcher that sets up the app's Python dependencies on first run.
-- Add a manual GitHub Actions build that packages and uploads a standalone Windows executable.
+- Build a standalone Windows executable on every branch push, publish branch prereleases and tagged stable releases from main, and show build status in the README.
 - Filter trades by departure port after scanning markets.
 - View stock and estimated single-crate prices for the selected port in the Port Market tab.
 - Explain market and trade tables in the README and add hover help for controls, tabs, and table headings.

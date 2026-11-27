@@ -1,6 +1,9 @@
 name: Build Windows executable
 
 on:
+  push:
+    branches:
+      - "**"
   workflow_dispatch:
 
 permissions:
@@ -51,3 +54,49 @@ jobs:
             dist/SailwindMarketWatcher.exe
             LICENSE
           if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: SailwindMarketWatcher-Windows-x64
+          path: release-files
+
+      - name: Publish Windows release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          tag="v$version"
+          release_flags=(--generate-notes --latest)
+
+          if [[ "$GITHUB_REF_NAME" != main ]]; then
+            tag="$tag-preview.$GITHUB_RUN_ID"
+            release_flags=(--prerelease --latest=false --notes "Build from $GITHUB_REF_NAME at $GITHUB_SHA.")
+          fi
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists. The build is available in this run's artifacts."
+            exit 0
+          fi
+
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>/dev/null; then
+            echo "::error::Tag $tag already exists without a release. Use a new version to publish this build."
+            exit 1
+          fi
+
+          archive="SailwindMarketWatcher-Windows-x64.zip"
+          zip -j "$archive" release-files/dist/SailwindMarketWatcher.exe release-files/LICENSE
+          gh release create "$tag" "$archive" --repo "$GITHUB_REPOSITORY" \
+            --title "$tag" --target "$GITHUB_SHA" "${release_flags[@]}"
