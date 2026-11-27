@@ -9,6 +9,10 @@
 - Optionally update regional exchange rates from a single Sailwind save slot.
 - Optionally use the selected currency's saved wallet balance as the trade and cargo budget.
 
+### Changed
+
+- Skip the Windows build and release workflow for changes limited to Markdown and the legacy README screenshot.
+
 ## [v1.4.0]
 
 ### Added

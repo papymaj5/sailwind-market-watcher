@@ -1,24 +1,19 @@
 # ⛵ Sailwind Market Watcher
 [![Windows build](https://github.com/papymaj5/sailwind-market-watcher/actions/workflows/build-windows.yml/badge.svg?branch=main&event=push)](https://github.com/papymaj5/sailwind-market-watcher/actions/workflows/build-windows.yml)
-![Market Finder GUI](MarketFinder.png)
 
 A real-time market and trade route analyzer for the open-world sailing game **Sailwind**.
 
-This tool connects to your running game, reads market data directly from memory, and helps you plan the most profitable trade routes between ports — all via an interactive graphical interface.
+The watcher reads market stock from the running game and estimates prices and profits for trades between ports.
 
 ---
 
 🚀 **How to Use**
 
-1. Launch Sailwind
-2. Once in-game, double-click **Launch Market Watcher.bat**
-3. Click **Initialize Markets** once per game session
-4. Open **Settings** to enter your player values:
-   - Currency exchange rate
-   - Cargo limits (mass/volume)
-   - Available money
-5. In **Trade Routes**, open **Filters** to set island groups and minimum profit
-6. Browse the trade table for top opportunities!
+1. Launch Sailwind and load your save.
+2. Open the [Windows executable](#standalone-windows-executable) or double-click **Launch Market Watcher.bat** if you’re running from source.
+3. Click **Initialize Markets** once per game session.
+4. In **Settings**, select your trading currency, enter your cargo limits, and click **Update Values**. Enter your current cash and exchange rate, or enable [saved cash and rates](#currency-conversion).
+5. Choose a **Departure port**. Open **Port Market** to check stock, **Trade Routes** to compare destinations, or **Cargo Plan** to plan a mixed load for one destination.
 
 ### Read the Port Market
 
@@ -79,10 +74,10 @@ the latest scan timings, readable market count, and read errors for a bug report
 ## 📌 Features
 
 ✅ **Live Memory Scan**\
-Scans all 32 in-game markets for live product supply data and prices.
+Locates 32 expected markets, then refreshes their stock data and recalculates price estimates.
 
 💰 **Profit-Driven Trade Routes**\
-Automatically finds the most profitable trades based on:
+Browse trades and sort them by:
 
 - Total profit
 - Profit per pound (weight)
@@ -99,7 +94,7 @@ Takes into account your current:
 Select specific **start** and **destination** island groups to tailor your strategy.
 
 🖼️ **Interactive GUI**\
-A modern, user-friendly interface with:
+The three views include:
 
 - Sortable Columns for simple analytics
 - Live-updating trade table
@@ -136,7 +131,8 @@ See [CHANGELOG.md](CHANGELOG.md) for changes in progress and release history.
 GitHub Actions runs Ruff's Python security rules, audits the installed Windows
 build dependencies with pip-audit, runs the regression suite, and smoke-tests
 the packaged executable. These checks run on branch pushes and pull requests
-to main. Release publishing waits for a successful build.
+to main when the changes include files beyond Markdown and the legacy README
+screenshot. Release publishing waits for a successful build.
 
 Market Watcher requests Windows process read and query access to Sailwind.
 The checks follow parts of the
@@ -145,20 +141,13 @@ including source analysis, dependency review, and testing the executable.
 
 ---
 
-🧠 **How It Works**
+### How it works
 
-- Uses `pymem` to attach to the running `Sailwind.exe` process
-- Scans for a known byte pattern to locate in-game market objects
-- Reads each market’s name, product list, and supply value directly from memory
-- Applies the game’s pricing formula to calculate sell/buy values dynamically:
-
-```python
-def calc_sell_price(supply, V):
-    coeff = 0.38 if supply > 0.5 else -1.68
-    return ceil((coeff * V / 10000) * (supply**2) - (abs(coeff) * V / 50) * supply + V)
-```
-
-- Builds a table of trade routes, ranked by total and per-item profit
+Market Watcher opens `Sailwind.exe` with read and query access and locates the
+markets using a known byte pattern. It reads stock from game memory and uses
+configured product values, the selected exchange rate, and a supply-based
+pricing model to estimate buy and sell prices. Check the in-game quote when
+placing a trade.
 
 ---
 
@@ -186,21 +175,20 @@ autosave and falls back to your manual budget if there is no unambiguous save.
 
 ## 🧰 Requirements
 
-- Windows OS
-- Python 3.9+
+- 64-bit Windows for the packaged executable
 - [**Sailwind** on Steam](https://store.steampowered.com/app/1764530/Sailwind) version 0.41
-- Python dependencies:
-  - `pymem`
-  - `pillow`
+- Python 3.9+, Pymem, and Pillow if you run from source
+
 ## 🐍 Installation Guide (Windows)
 
 ### Standalone Windows executable
 
 Download **SailwindMarketWatcher-Windows-x64.zip** from [Releases](https://github.com/papymaj5/sailwind-market-watcher/releases). Extract it, load your Sailwind save, and double-click `SailwindMarketWatcher.exe`. The executable bundles Python and the app dependencies.
 
-Every branch push runs the tests and builds the executable. Pushes to branches
-such as `dev` publish prereleases. A push to `main`, including a merged pull
-request, publishes a stable release and creates a tag from the version in
+Branch pushes with build changes run the tests and build the executable.
+Successful builds from branches such as `dev` publish prereleases. A successful
+push build on `main`, including a merged pull request, publishes a stable release
+and creates a tag from the version in
 `pyproject.toml`. Bump that version before merging the next stable release.
 If the release already exists, the new build is still available in the run's
 **Artifacts**. Manual runs from **Actions → Build Windows executable → Run workflow**
@@ -210,120 +198,25 @@ produce artifacts without publishing a release.
 
 Install Python 3.9 or newer, extract the project to a writable folder, and load your Sailwind save. Double-click **Launch Market Watcher.bat** in the project folder. The first launch needs internet access to install Pymem and Pillow into a local `.venv`. Later launches reuse that environment. The console stays open while the app runs so you can see scan timings and errors.
 
-The remaining steps describe the manual setup for anyone who prefers to launch from a terminal.
+### Run from PowerShell
 
----
+To run from source without the double-click launcher, download the source ZIP
+from [this fork](https://github.com/papymaj5/sailwind-market-watcher) or clone
+it. Open PowerShell in the extracted or cloned folder, then run:
 
-### ✅ 1. Install Python
-
-1. Download Python from the official site:\
-   👉 [https://www.python.org/downloads/windows](https://www.python.org/downloads/windows)
-
-2. Run the installer and:
-
-   - ✅ **Check** “Add Python to PATH”
-   - Click **Install Now**
-   - Wait for it to finish, then click **Close**
-
----
-
-### 🖥️ 2. Open Command Prompt
-
-To open a Command Prompt window:
-
-- Press **Windows key**, type **cmd**, and press **Enter**
-
-Or to open it in the app folder:
-
-- Hold **Shift** and **Right-click** in the folder window
-- Choose **"Open PowerShell window here"** or **"Open Command Window Here"**
-
----
-
-### 📁 3. Download the Project
-
-**Option A: Download ZIP**
-
-- Go to [Sailwind Market Watcher GitHub](https://github.com/Weirwindle/sailwind-market-watcher)
-- Click the green **“Code”** button → **“Download ZIP”**
-- Extract the folder
-
-**Option B: Use Git (optional)**
-
-```bash
-git clone https://github.com/Weirwindle/sailwind-market-watcher.git
-```
-
----
-
-### 📦 4. Install Required Dependencies
-
-Navigate to the extracted folder in Command Prompt:
-
-```bash
-cd path\to\Sailwind-Market-Watcher
-```
-
-Then install the required Python packages:
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-### 🚀 5. Run the App
-
-While in the folder, run:
-
-```bash
+```powershell
+python -m pip install -r requirements.txt
 python main.py
 ```
 
-Make sure Sailwind is running before launching the app.
-
-
----
+Load a save in Sailwind before opening the watcher.
 
 ## 🐞 Troubleshooting
 
-- **"Could not read memory"**: Make sure Sailwind is running
-- **"Markets not found"**: Game update changed memory layout — wait for fix
-- **App closes instantly**: Run from terminal to see errors: `python main.py`
-- **tkinter not found**: Linux users may need: `sudo apt install python3-tk`
-
----
-
-## 🔄 Changelog
-
-## [v1.3.0] - 2025-10-13
-### Added
-- Sortable Columns. 
-    Primary Sort on Origin and Destination Columns
-    Secondary Sort on $Profit, $/Pound, and $/Item metrics
-- Clean up and refactoring
-
-## [v1.2.0] - 2025-10-12
-### Added
-- Support the 3 new Al Ankh islands. Old Ankh Town, Mirage Island and Saffron Island
-- 2 New tradable items. Salt and Saffron
-
-## [v1.1.0] - 2025-07-02
-### Added
-- Support for 2 new islands in latest Sailwind version
-- 3 new tradeable items
-
-### Fixed
-- Fixed Emeralch Arch trades not showing because of a misname
-- Removed Unneeded Library PSutil
-
-## [v1.0.0] - 2025-06-29
-### Added
-- Initial release of Sailwind Market Watcher
-- Trade route table and player settings input
-
-
----
+- **Sailwind is not running** — Load a save in Sailwind, then reopen Market Watcher.
+- **Market initialization failed** — Use **Diagnostics → Copy diagnostics** to capture the detected market count and any read errors.
+- **Saved rates or balance did not update** — Save in Sailwind and give the watcher a few seconds to refresh. With multiple local slots, enter the rate or balance manually.
+- **Prices differ from Sailwind** — Check the selected currency and its rate per Gold Lion. The watcher uses a supply-based estimate, so check the game’s quote before trading.
 
 ## 📜 License
 
