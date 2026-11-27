@@ -42,7 +42,11 @@ class Product:
         self.update_product()
 
     def update_product(self, conversion_rate=311):
-        self.supply = read_game_memory(self.pm, self.supply_address, "float")
+        self.supply = read_game_memory(
+            self.pm, self.supply_address, "float", raise_on_error=True
+        )
+        if not math.isfinite(self.supply):
+            raise ValueError(f"{self.name} has invalid supply data.")
         self.amnt = max(0, math.floor(self.supply - self.limit + 1))
         self.base_price = self.raw_price * conversion_rate
         self.sell_price = self.calc_sell_price(self.supply)
@@ -98,8 +102,12 @@ class Market:
         self.pm = pm
         self.base = base
         self.name = self._get_market_name()
-        self.index = read_game_memory(pm, pm.read_longlong(base + 0x38) + 0x58, "int")
-        self.limit = read_game_memory(pm, base + 0x4C, "float")
+        self.index = read_game_memory(
+            pm, pm.read_longlong(base + 0x38) + 0x58, "int", raise_on_error=True
+        )
+        self.limit = read_game_memory(pm, base + 0x4C, "float", raise_on_error=True)
+        if not math.isfinite(self.limit):
+            raise ValueError(f"{self.name} has an invalid stock limit.")
         self.products = self._init_products()
 
     def _get_market_name(self):
@@ -124,6 +132,18 @@ class Market:
     def update_products(self, conversion_rate):
         for product in self.products:
             product.update_product(conversion_rate)
+
+
+def refresh_markets(markets, conversion_rate):
+    readable, errors = [], []
+    for market in markets:
+        try:
+            market.update_products(conversion_rate)
+        except (pymem.exception.PymemError, ValueError, OverflowError) as error:
+            errors.append(f"{market.name}: {error}")
+        else:
+            readable.append(market)
+    return readable, errors
 
 
 @dataclass
@@ -231,3 +251,72 @@ def generate_trade_routes(start_groups, end_groups, player, markets, origin_port
                 if metrics and metrics["$Profit"] > player.min_profit:
                     trade_routes.append(metrics)
     return trade_routes
+
+
+@dataclass
+class CargoLine:
+    product: str
+    quantity: int = 0
+    buy: int = 0
+    sell: int = 0
+    weight: float = 0
+    volume: float = 0
+
+    @property
+    def profit(self):
+        return self.sell - self.buy
+
+
+def plan_cargo(origin, destination, player):
+    """Build a feasible load by favoring margin per share of limited capacity."""
+    if (
+        origin is destination
+        or min(player.principal, player.mass_limit, player.volume_limit) <= 0
+    ):
+        return []
+
+    destination_products = {product.name: product for product in destination.products}
+    candidates = [
+        (source, destination_products[source.name], CargoLine(source.name))
+        for source in origin.products
+        if source.amnt > 0 and source.name in destination_products
+    ]
+    budget, weight, volume = player.principal, player.mass_limit, player.volume_limit
+    while min(budget, weight, volume) > 0:
+        best = None
+        best_score = 0
+        for source, target, line in candidates:
+            if (
+                line.quantity >= source.amnt
+                or source.weight > weight
+                or source.volume > volume
+            ):
+                continue
+            buy = source.calc_buy_price(source.supply - line.quantity)
+            if not 0 < buy <= budget:
+                continue
+            sell = target.calc_sell_price(target.supply + line.quantity)
+            margin = sell - buy
+            if margin <= 0:
+                continue
+            capacity_share = max(
+                buy / budget, source.weight / weight, source.volume / volume
+            )
+            score = margin / capacity_share
+            if score > best_score:
+                best = source, line, buy, sell
+                best_score = score
+
+        if best is None:
+            break
+        source, line, buy, sell = best
+        line.quantity += 1
+        line.buy += buy
+        line.sell += sell
+        line.weight += source.weight
+        line.volume += source.volume
+        budget -= buy
+        weight -= source.weight
+        volume -= source.volume
+
+    return [line for _, _, line in candidates if line.quantity]

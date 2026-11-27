@@ -3,6 +3,7 @@
 import ctypes
 import math
 import tkinter as tk
+from datetime import datetime
 from queue import Empty, Queue
 from threading import Thread
 from time import perf_counter
@@ -11,8 +12,26 @@ from tkinter import ttk
 import pymem
 from PIL import Image, ImageTk
 
-from market import Market, generate_trade_routes, scan_market_addresses
-from settings import APP_DIR, PLAYER_SETTINGS_PATH, Player, save_player_settings
+from market import (
+    Market,
+    refresh_markets,
+    scan_market_addresses,
+)
+from memhack import open_read_only_process
+from settings import (
+    APP_DIR,
+    APP_VERSION,
+    PLAYER_SETTINGS_PATH,
+    Player,
+    save_player_settings,
+)
+from views import (
+    CargoPlanView,
+    PortMarketView,
+    TradeRoutesView,
+    create_tooltip,
+    toggle_panel,
+)
 
 START_GROUPS_OPTION = "Selected start groups"
 
@@ -48,6 +67,7 @@ def configure_theme(root):
     )
     style.configure("TLabelframe.Label", font=("Segoe UI", 10, "bold"))
     style.configure("Muted.TLabel", foreground=muted)
+    style.configure("Footer.TLabel", background=background, foreground=muted)
     style.configure("Tooltip.TLabel", background="#263b52")
     style.configure(
         "TButton",
@@ -147,17 +167,33 @@ def configure_theme(root):
 
 
 def main():
+    scan_report = ["Markets have not been initialized."]
+    refresh_report = ["No refresh yet."]
+    last_refresh = None
+    readable_markets = []
+
+    def copy_diagnostics():
+        root.clipboard_clear()
+        root.clipboard_append(
+            "\n".join(
+                ["Sailwind Market Watcher diagnostics", *scan_report, *refresh_report]
+            )
+        )
+        diagnostics_button.config(text="Copied")
+        root.after(1600, lambda: diagnostics_button.config(text="Diagnostics"))
+
     def find_markets():
         results = Queue()
         started_at = perf_counter()
         start_button.state(["disabled"])
-        status_label.config(text="Scanning for markets…")
+        status_label.config(text="Initializing market list…")
 
         def scan():
+            report = []
             try:
                 scan_result = scan_market_addresses(pm.process_handle)
                 addresses = scan_result.addresses
-                print(
+                report.append(
                     f"Scan timing: region queries {scan_result.region_query_seconds:.2f}s, "
                     f"memory reads {scan_result.memory_read_seconds:.2f}s, "
                     f"signature matching {scan_result.signature_match_seconds:.2f}s."
@@ -165,31 +201,53 @@ def main():
                 if len(addresses) != 32:
                     raise ValueError(f"Found {len(addresses)} markets, expected 32.")
                 load_started_at = perf_counter()
-                scanned_markets = [Market(pm, address - 0x4E) for address in addresses]
-                print(f"Market loading took {perf_counter() - load_started_at:.2f}s.")
-                results.put(scanned_markets)
+                scanned_markets = []
+                for slot, address in enumerate(addresses, start=1):
+                    try:
+                        market = Market(pm, address - 0x4E)
+                        if market.name == "Unknown Market":
+                            raise ValueError("Market name could not be read.")
+                    except (
+                        pymem.exception.PymemError,
+                        ValueError,
+                        OverflowError,
+                    ) as error:
+                        report.append(f"Market slot {slot}: {error}")
+                    else:
+                        scanned_markets.append(market)
+                report.append(
+                    f"Market loading took {perf_counter() - load_started_at:.2f}s."
+                )
+                if not scanned_markets:
+                    raise ValueError("None of the market records could be read.")
+                results.put((scanned_markets, report))
             except Exception as error:
-                results.put(error)
+                report.append(f"Market scan failed: {error}")
+                results.put((None, report))
 
         def finish_scan():
             try:
-                result = results.get_nowait()
+                result, report = results.get_nowait()
             except Empty:
                 root.after(100, finish_scan)
                 return
 
             start_button.state(["!disabled"])
-            if isinstance(result, Exception):
-                print(f"Market scan failed: {result}")
+            elapsed = perf_counter() - started_at
+            scan_report[:] = [
+                f"Initialization finished at {datetime.now():%H:%M:%S} in {elapsed:.1f}s.",
+                *report,
+            ]
+            print("\n".join(scan_report))
+            if result is None:
                 status_label.config(
-                    text=f"Market scan failed. {result}"
-                    if isinstance(result, ValueError)
-                    else "Market scan failed. See the console for details."
+                    text="Market initialization failed. Copy diagnostics for details."
                 )
                 return
 
             markets[:] = result
-            summary = f"Found {len(markets)} markets in {perf_counter() - started_at:.1f} seconds."
+            summary = f"Loaded {len(markets)} of 32 markets in {elapsed:.1f} seconds."
+            scan_report.append(summary)
             status_label.config(text=summary)
             print(summary)
             for market in markets:
@@ -202,187 +260,86 @@ def main():
             )
             if origin_port_var.get() not in port_names:
                 origin_port_var.set(START_GROUPS_OPTION)
-            update_chart()
+            refresh_market_data()
 
         Thread(target=scan, daemon=True).start()
         root.after(100, finish_scan)
 
-    def update_values():
+    def update_values(inputs, settings_status):
+        settings = vars(player).copy()
         try:
-            settings = {key: float(var.get()) for key, var in player_vars.items()}
+            settings.update({key: float(var.get()) for key, var in inputs.items()})
             if not all(map(math.isfinite, settings.values())):
                 raise ValueError
         except ValueError:
-            player_status.config(text="Enter a number in each field.")
+            settings_status.config(text="Enter a number in each field.")
             return
 
         player.update(**settings)
         try:
             save_player_settings(PLAYER_SETTINGS_PATH, settings)
         except OSError as error:
-            player_status.config(text="Applied for this session only.")
+            settings_status.config(text="Applied for this session only.")
             print(f"Could not save player settings: {error}")
         else:
-            player_status.config(text="Player inputs saved.")
+            settings_status.config(text="Saved.")
+        update_player_summary()
+        refresh_market_data()
+
+    def refresh_market_data():
+        nonlocal last_refresh, readable_markets
+        if not markets:
+            return
+
+        readable_markets, read_errors = refresh_markets(markets, player.conversion_rate)
+        if readable_markets:
+            last_refresh = datetime.now()
+        time_label = (
+            f"Last refresh {last_refresh:%H:%M:%S}"
+            if last_refresh
+            else "No successful refresh"
+        )
+        refresh_summary = f"{time_label} · {len(readable_markets)}/{len(markets)} loaded markets readable"
+        refresh_status.config(text=refresh_summary)
+        refresh_report[:] = [refresh_summary, *read_errors]
         update_chart()
 
     def update_chart():
         if not markets:
             return
 
-        start_groups = [
-            f"{name} (Group {idx + 1})"
-            for idx, name in enumerate(island_names)
-            if start_group_vars[name].get() == 1
-        ]
-        end_groups = [
-            f"{name} (Group {idx + 1})"
-            for idx, name in enumerate(island_names)
-            if end_group_vars[name].get() == 1
-        ]
-
-        for market in markets:
-            market.update_products(player.conversion_rate)
-
-        origin_port = origin_port_var.get()
-        update_port_market(
-            next((market for market in markets if market.name == origin_port), None)
-        )
-        if origin_port == START_GROUPS_OPTION:
-            origin_port = None
-        trade_routes = generate_trade_routes(
-            start_groups, end_groups, player, markets, origin_port
-        )
-
-        sort_routes(trade_routes)
-
-        tree.delete(*tree.get_children())
-        for row, route in enumerate(trade_routes):
-            tree.insert(
-                "",
-                "end",
-                tags=("alternate",) if row % 2 else (),
-                values=[
-                    route[k]
-                    for k in [
-                        "Start Market",
-                        "End Market",
-                        "Product",
-                        "Qnty",
-                        "$_Buy",
-                        "$_Sell",
-                        "$Profit",
-                        "$/Pound",
-                        "$/Item",
-                    ]
-                ],
-            )
-
-        update_column_headers()
-
-    def update_port_market(market):
-        port_tree.delete(*port_tree.get_children())
-        if market is None:
-            port_caption.config(text="Select a departure port to view its market.")
+        origin_name = origin_port_var.get()
+        if origin_name == START_GROUPS_OPTION:
+            origin_name = None
+        active_tab = tabs.select()
+        if active_tab == str(routes_view):
+            routes_view.render(origin_name, readable_markets, player)
             return
 
-        port_caption.config(text=market.name)
-        for row, product in enumerate(
-            sorted(market.products, key=lambda product: product.name)
-        ):
-            port_tree.insert(
-                "",
-                "end",
-                tags=("alternate",) if row % 2 else (),
-                values=(
-                    product.name,
-                    product.amnt,
-                    product.buy_price if product.amnt > 0 else "—",
-                    product.sell_price,
-                ),
-            )
+        origin = next(
+            (market for market in readable_markets if market.name == origin_name), None
+        )
+        if active_tab == str(port_view):
+            port_view.render(origin_name, origin)
+        elif active_tab == str(cargo_view):
+            cargo_view.render(origin_name, origin, markets, readable_markets, player)
 
     def update_loop():
-        update_chart()
+        refresh_market_data()
         root.after(5000, update_loop)
-
-    def on_mouse_wheel(event, tree):
-        if event.delta > 0:  # Scroll up
-            tree.yview_scroll(-5, "units")
-        else:  # Scroll down
-            tree.yview_scroll(5, "units")
-
-    def create_tooltip(widget, text):
-        """Show fixed help or look up help for the area under the pointer."""
-        window = None
-        visible_text = None
-
-        def hide_tip(_event=None):
-            nonlocal window, visible_text
-            if window is not None:
-                window.destroy()
-                window = None
-            visible_text = None
-
-        def show_tip(event):
-            nonlocal window, visible_text
-            message = text(event) if callable(text) else text
-            if message == visible_text:
-                return
-            hide_tip()
-            if message is None:
-                return
-            visible_text = message
-            window = tk.Toplevel(widget)
-            window.wm_overrideredirect(True)
-            ttk.Label(
-                window, text=message, style="Tooltip.TLabel", padding=8, wraplength=300
-            ).pack()
-            window.update_idletasks()
-            x = min(
-                event.x_root + 16, widget.winfo_screenwidth() - window.winfo_reqwidth()
-            )
-            y = event.y_root + 20
-            if y + window.winfo_reqheight() > widget.winfo_screenheight():
-                y = event.y_root - window.winfo_reqheight() - 8
-            window.wm_geometry(f"{x:+d}{y:+d}")
-
-        widget.bind("<Enter>", show_tip, add="+")
-        widget.bind("<Leave>", hide_tip, add="+")
-        if callable(text):
-            widget.bind("<Motion>", show_tip, add="+")
-
-    def add_heading_tooltips(table, help_by_column):
-        def heading_help(event):
-            if table.identify_region(event.x, event.y) != "heading":
-                return None
-            column = table.column(table.identify_column(event.x), "id")
-            return help_by_column.get(column)
-
-        create_tooltip(table, heading_help)
-
-    def create_group_checkboxes(parent, names, default_func, label_text, tooltip):
-        """Creates a labeled group of checkboxes with default values."""
-        label = ttk.Label(parent, text=label_text, style="Muted.TLabel")
-        label.grid(row=0, column=0, columnspan=2, sticky="w", padx=3, pady=(0, 6))
-        create_tooltip(label, tooltip)
-        vars_dict = {name: tk.IntVar(value=default_func(name)) for name in names}
-        half = (len(names) + 1) // 2
-        for idx, (name, var) in enumerate(vars_dict.items()):
-            ttk.Checkbutton(parent, text=name, variable=var, command=update_chart).grid(
-                row=(idx % half) + 1, column=idx // half, sticky="w", padx=10, pady=2
-            )
-        return vars_dict
 
     print("=== Island Market Scanner ===")
 
     try:
         process_name = "Sailwind.exe"
-        pm = pymem.Pymem(process_name)
+        pm = open_read_only_process(process_name)
     except pymem.exception.ProcessNotFound:
         print(
             f"Error: {process_name} is not running. Please start the game and try again."
         )
+        return 1
+    except pymem.exception.CouldNotOpenProcess:
+        print(f"Error: Could not open {process_name} for read-only access.")
         return 1
 
     # Set AppUserModelID for taskbar icon on Windows
@@ -400,6 +357,13 @@ def main():
 
     configure_theme(root)
 
+    def update_player_summary():
+        player_summary.config(
+            text=(
+                f"Cash {player.principal:,.8g}  ·  Weight {player.mass_limit:,.8g}  ·  Volume {player.volume_limit:,.8g}"
+            )
+        )
+
     root.grid_rowconfigure(2, weight=1)
     root.grid_columnconfigure(0, weight=1)
 
@@ -411,17 +375,33 @@ def main():
     markets = []
     start_button = ttk.Button(
         button_frame,
-        text="Scan For Markets",
+        text="Initialize Markets",
         style="Accent.TButton",
         command=find_markets,
     )
     start_button.grid(row=0, column=0, sticky="w", padx=(0, 6))
-    create_tooltip(start_button, "Read market data from your running Sailwind game.")
+    create_tooltip(
+        start_button,
+        "Find markets once per game session. Stock and price estimates update automatically afterward.",
+    )
 
     status_label = ttk.Label(
-        button_frame, text="Scan to load market data.", style="Muted.TLabel"
+        button_frame, text="Initialize markets to begin.", style="Muted.TLabel"
     )
-    status_label.grid(row=1, column=0, columnspan=3, sticky="w", pady=(7, 0))
+    status_label.grid(row=1, column=0, columnspan=5, sticky="w", pady=(7, 0))
+    refresh_status = ttk.Label(button_frame, text="", style="Muted.TLabel")
+    refresh_status.grid(row=2, column=0, columnspan=5, sticky="w", pady=(3, 0))
+    player_summary = ttk.Label(button_frame, style="Muted.TLabel")
+    player_summary.grid(row=1, column=5, rowspan=2, sticky="e", pady=(7, 0))
+    button_frame.columnconfigure(5, weight=1)
+    update_player_summary()
+
+    diagnostics_button = ttk.Menubutton(button_frame, text="Diagnostics")
+    diagnostics_menu = tk.Menu(diagnostics_button, tearoff=False)
+    diagnostics_menu.add_command(label="Copy diagnostics", command=copy_diagnostics)
+    diagnostics_button.configure(menu=diagnostics_menu)
+    diagnostics_button.grid(row=0, column=4, padx=(8, 0))
+    create_tooltip(diagnostics_button, "Options for troubleshooting market reads.")
 
     ttk.Label(button_frame, text="Departure port").grid(row=0, column=1, padx=(12, 4))
     origin_port_var = tk.StringVar(value=START_GROUPS_OPTION)
@@ -435,12 +415,18 @@ def main():
         "Choose a port for Port Market and departures. Selected start groups restores regional browsing.",
     )
 
-    top_frame = ttk.Frame(root, style="Page.TFrame")
-    top_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=12)
-    top_frame.columnconfigure(1, weight=1)
-
-    player_frame = ttk.LabelFrame(top_frame, text="Player inputs", padding=(12, 8))
-    player_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+    player_frame = ttk.Frame(root, padding=(14, 10))
+    player_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(8, 0))
+    player_frame.grid_remove()
+    settings_button = ttk.Button(
+        button_frame,
+        text="Settings",
+        command=lambda: toggle_panel(player_frame, settings_button, "Settings"),
+    )
+    settings_button.grid(row=0, column=3, padx=(12, 0))
+    create_tooltip(
+        settings_button, "Edit available cash, exchange rate, and cargo limits."
+    )
 
     player_fields = (
         ("principal", "Player Principal:", "Available money in the selected currency."),
@@ -459,74 +445,39 @@ def main():
             "Volume Limit:",
             "Maximum cargo volume.\nDhow ~40, sanbuq ~120.",
         ),
-        ("min_profit", "Min Profit:", "Only show trades above this profit."),
     )
     player_vars = {}
-    for row, (key, label, tooltip) in enumerate(player_fields):
+    for column, (key, label, tooltip) in enumerate(player_fields):
         variable = tk.StringVar(value=getattr(player, key))
         player_vars[key] = variable
         field_label = ttk.Label(player_frame, text=label)
-        field_label.grid(row=row, column=0, sticky="w", pady=2)
+        field_label.grid(row=0, column=column, sticky="w", padx=(0, 12))
         create_tooltip(field_label, tooltip)
         entry = ttk.Entry(player_frame, textvariable=variable, width=15)
-        entry.grid(row=row, column=1, sticky="ew", pady=2)
+        entry.grid(row=1, column=column, sticky="ew", padx=(0, 12), pady=(4, 0))
         create_tooltip(entry, tooltip)
 
-    update_button = ttk.Button(
-        player_frame, text="Update Values", command=update_values
-    )
-    update_button.grid(row=5, column=0, columnspan=2, pady=(6, 2))
-    create_tooltip(
-        update_button,
-        "Apply your inputs to trade estimates and save them for the next launch.",
-    )
     player_status = ttk.Label(player_frame, text="", style="Muted.TLabel")
-    player_status.grid(row=6, column=0, columnspan=2, sticky="w")
-
-    player_frame.columnconfigure(1, weight=1)
-
-    group_frame = ttk.LabelFrame(top_frame, text="Island groups", padding=(12, 8))
-    group_frame.grid(row=0, column=1, sticky="nsew")
-    group_frame.columnconfigure((0, 1), weight=1, uniform="group")
-
-    start_group_frame = ttk.Frame(group_frame, padding=(0, 4))
-    start_group_frame.grid(row=0, column=0, sticky="nw")
-    end_group_frame = ttk.Frame(group_frame, padding=(0, 4))
-    end_group_frame.grid(row=0, column=1, sticky="nw")
-
-    island_names = [
-        "Al'Ankh",
-        "Aestrin",
-        "Chronos",
-        "Happy Bay",
-        "Emerald Arch",
-        "Fire Fish Lagoon",
-    ]
-
-    # For start groups, only "Al'Ankh" is enabled by default.
-    start_group_vars = create_group_checkboxes(
-        start_group_frame,
-        island_names,
-        default_func=lambda name: 1 if name == "Al'Ankh" else 0,
-        label_text="Start Groups:",
-        tooltip="Choose departure regions while Departure port is set to Selected start groups.",
+    player_status.grid(row=2, column=0, columnspan=5, sticky="w")
+    update_button = ttk.Button(
+        player_frame,
+        text="Update Values",
+        command=lambda: update_values(player_vars, player_status),
     )
-
-    # For end groups, all checkboxes are enabled by default.
-    end_group_vars = create_group_checkboxes(
-        end_group_frame,
-        island_names,
-        default_func=lambda name: 1,
-        label_text="End Groups:",
-        tooltip="Choose which regions can appear as destinations in Trade Routes.",
-    )
+    update_button.grid(row=1, column=4, sticky="w")
 
     tabs = ttk.Notebook(root)
-    tabs.grid(row=2, column=0, sticky="nsew", padx=16, pady=(0, 16))
-    table_frame = ttk.Frame(tabs, style="Page.TFrame")
-    port_frame = ttk.Frame(tabs, padding=(8, 8, 8, 0))
-    tabs.add(table_frame, text="Trade Routes")
-    tabs.add(port_frame, text="Port Market")
+    tabs.grid(row=2, column=0, sticky="nsew", padx=16, pady=(10, 0))
+    version_label = ttk.Label(
+        root, text=f"Version {APP_VERSION}", style="Footer.TLabel"
+    )
+    version_label.grid(row=3, column=0, sticky="e", padx=16, pady=(4, 8))
+    routes_view = TradeRoutesView(tabs, player.min_profit, update_chart, update_values)
+    port_view = PortMarketView(tabs)
+    cargo_view = CargoPlanView(tabs, update_chart)
+    tabs.add(routes_view, text="Trade Routes")
+    tabs.add(port_view, text="Port Market")
+    tabs.add(cargo_view, text="Cargo Plan")
 
     def tab_help(event):
         try:
@@ -536,148 +487,12 @@ def main():
         return {
             0: "Compare estimated profit for one product at a time across ports.",
             1: "See stock and estimated one-crate prices at the selected departure port.",
+            2: "Suggest a mixed load for one destination within your cash and cargo limits.",
         }.get(tab)
 
     create_tooltip(tabs, tab_help)
 
-    port_caption = ttk.Label(port_frame, text="Scan and select a departure port.")
-    port_caption.grid(row=0, column=0, sticky="w", pady=(0, 8))
-    port_columns = ("Product", "Stock", "Est. Buy / Crate", "Est. Sell / Crate")
-    port_tree = ttk.Treeview(port_frame, columns=port_columns, show="headings")
-    add_heading_tooltips(
-        port_tree,
-        {
-            "Product": "The commodity listed at the selected port.",
-            "Stock": "Estimated number of crates available to buy at this port.",
-            "Est. Buy / Crate": "Estimated cost of the next crate. A dash means there is no stock to buy.",
-            "Est. Sell / Crate": "Estimated amount the port pays for one crate you already own.",
-        },
-    )
-    port_tree.tag_configure("alternate", background="#142238")
-    for column in port_columns:
-        port_tree.heading(column, text=column)
-        port_tree.column(
-            column, width=150, anchor="w" if column == "Product" else "center"
-        )
-    port_tree.grid(row=1, column=0, sticky="nsew")
-    port_scrollbar = ttk.Scrollbar(
-        port_frame, orient="vertical", command=port_tree.yview
-    )
-    port_scrollbar.grid(row=1, column=1, sticky="ns")
-    port_tree.configure(yscrollcommand=port_scrollbar.set)
-    port_tree.bind("<MouseWheel>", lambda event: on_mouse_wheel(event, port_tree))
-    port_frame.columnconfigure(0, weight=1)
-    port_frame.rowconfigure(1, weight=1)
-
-    columns = (
-        "From",
-        "To",
-        "Product",
-        "Qnty",
-        "$Buy",
-        "$Sell",
-        "$Profit",
-        "$/Pound",
-        "$/Item",
-    )
-    tree = ttk.Treeview(table_frame, columns=columns, show="headings")
-    add_heading_tooltips(
-        tree,
-        {
-            "From": "Port where you buy the cargo. Click to sort by departure port.",
-            "To": "Port where you sell the cargo. Click to sort by destination.",
-            "Product": "The commodity traded on this route.",
-            "Qnty": "Planned crates / estimated crates available at the departure port.",
-            "$Buy": "Estimated total purchase cost for the planned crates.",
-            "$Sell": "Estimated total sale revenue for the planned crates.",
-            "$Profit": "Estimated sale revenue minus purchase cost. Click to sort.",
-            "$/Pound": "Estimated profit per pound of cargo. Click to sort.",
-            "$/Item": "Estimated profit per crate. Click to sort.",
-        },
-    )
-    tree.tag_configure("alternate", background="#142238")
-
-    sort_columns = {"From": "Start Market", "To": "End Market"}
-    primary_sortable = ("From", "To")
-    secondary_sortable = ("$Profit", "$/Pound", "$/Item")
-    sort_state = {
-        "primary_col": "From",
-        "primary_reverse": False,
-        "secondary_col": "$Profit",
-        "secondary_reverse": True,
-    }
-
-    def treeview_sort_column(column):
-        if column in primary_sortable:
-            priority = "primary"
-        elif column in secondary_sortable:
-            priority = "secondary"
-        else:
-            return
-
-        column_key = f"{priority}_col"
-        reverse_key = f"{priority}_reverse"
-        if sort_state[column_key] == column:
-            sort_state[reverse_key] = not sort_state[reverse_key]
-        else:
-            sort_state[column_key] = column
-            sort_state[reverse_key] = priority == "secondary"
-        update_chart()
-
-    def sort_routes(routes):
-        # Stable sorts keep the profit metric ordered within each port.
-        secondary = sort_state["secondary_col"]
-        primary = sort_columns[sort_state["primary_col"]]
-        routes.sort(
-            key=lambda route: route[secondary], reverse=sort_state["secondary_reverse"]
-        )
-        routes.sort(
-            key=lambda route: route[primary], reverse=sort_state["primary_reverse"]
-        )
-
-    def update_column_headers():
-        """Update Treeview headers with arrow indicators for primary/secondary sorts."""
-        for col in columns:
-            arrow = ""
-            if col == sort_state["primary_col"]:
-                arrow = " ▲" if sort_state["primary_reverse"] else " ▼"
-            elif col == sort_state["secondary_col"]:
-                arrow = " ⮟" if sort_state["secondary_reverse"] else " ⮝"
-            tree.heading(
-                col, text=col + arrow, command=lambda c=col: treeview_sort_column(c)
-            )
-
-    column_widths = {
-        "From": 155,
-        "To": 155,
-        "Product": 105,
-        "Qnty": 65,
-        "$Buy": 75,
-        "$Sell": 75,
-        "$Profit": 80,
-        "$/Pound": 85,
-        "$/Item": 75,
-    }
-
-    for col in columns:
-        tree.column(
-            col,
-            width=column_widths[col],
-            minwidth=55 if col.startswith("$") else 65,
-            anchor="w" if col in ("From", "To", "Product") else "center",
-        )
-
-    tree.grid(row=0, column=0, sticky="nsew")
-
-    table_frame.grid_columnconfigure(0, weight=1)
-    table_frame.grid_rowconfigure(0, weight=1)
-
-    scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-    tree.configure(yscroll=scrollbar.set)
-    scrollbar.grid(row=0, column=1, sticky="ns")
-    tree.bind("<MouseWheel>", lambda event: on_mouse_wheel(event, tree))
-
-    update_column_headers()
+    tabs.bind("<<NotebookTabChanged>>", lambda event: update_chart())
     root.after(2000, update_loop)
     root.mainloop()
 

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import market
+from memhack import open_read_only_process
 from settings import PLAYER_SETTINGS, load_player_settings, save_player_settings
 
 
@@ -48,7 +49,110 @@ class PricingTests(unittest.TestCase):
         )
 
 
+class CargoPlanTests(unittest.TestCase):
+    def test_mixed_load_reprices_each_crate_and_respects_limits(self):
+        def source(name, stock):
+            return SimpleNamespace(
+                name=name,
+                amnt=stock,
+                supply=20,
+                weight=2,
+                volume=1,
+                calc_buy_price=lambda supply: 10 + (20 - supply),
+            )
+
+        def destination(name, starting_price):
+            return SimpleNamespace(
+                name=name,
+                supply=0,
+                calc_sell_price=lambda supply: starting_price - 5 * supply,
+            )
+
+        origin = SimpleNamespace(
+            products=[source("Goods", 10), source("Pork", 1), source("Books", 0)]
+        )
+        target = SimpleNamespace(
+            products=[
+                destination("Goods", 25),
+                destination("Pork", 23),
+                destination("Books", 100),
+            ]
+        )
+        player = SimpleNamespace(principal=31, mass_limit=6, volume_limit=3)
+        lines = market.plan_cargo(origin, target, player)
+        self.assertEqual(
+            [(line.product, line.quantity, line.buy, line.sell) for line in lines],
+            [("Goods", 2, 21, 45), ("Pork", 1, 10, 23)],
+        )
+        self.assertEqual(sum(line.weight for line in lines), player.mass_limit)
+        self.assertEqual(sum(line.volume for line in lines), player.volume_limit)
+        self.assertEqual(sum(line.buy for line in lines), player.principal)
+
+    def test_plan_stops_when_destination_price_no_longer_covers_cost(self):
+        origin = SimpleNamespace(
+            products=[
+                SimpleNamespace(
+                    name="Goods",
+                    amnt=10,
+                    supply=20,
+                    weight=1,
+                    volume=1,
+                    calc_buy_price=lambda _: 10,
+                )
+            ]
+        )
+        target = SimpleNamespace(
+            products=[
+                SimpleNamespace(
+                    name="Goods",
+                    supply=0,
+                    calc_sell_price=lambda supply: 12 - 2 * supply,
+                )
+            ]
+        )
+        player = SimpleNamespace(principal=100, mass_limit=100, volume_limit=100)
+        self.assertEqual(
+            [line.quantity for line in market.plan_cargo(origin, target, player)], [1]
+        )
+
+
 class ScannerTests(unittest.TestCase):
+    def test_game_handle_requests_only_query_and_read_access(self):
+        with (
+            patch(
+                "memhack.pymem.process.process_from_name",
+                return_value=SimpleNamespace(th32ProcessID=123),
+            ) as find,
+            patch("memhack.pymem.process.open", return_value=456) as open_process,
+        ):
+            reader = open_read_only_process("Sailwind.exe")
+
+        find.assert_called_once_with("Sailwind.exe", exact_match=True)
+        access = market.pymem.ressources.structure.PROCESS
+        open_process.assert_called_once_with(
+            123,
+            debug=False,
+            process_access=access.PROCESS_QUERY_INFORMATION.value
+            | access.PROCESS_VM_READ.value,
+        )
+        self.assertEqual(reader.process_handle, 456)
+
+    def test_refresh_reports_bad_markets_and_retries_them(self):
+        from unittest.mock import Mock
+
+        healthy = SimpleNamespace(name="Gold Rock City", update_products=Mock())
+        flaky = SimpleNamespace(
+            name="Neverdin",
+            update_products=Mock(side_effect=[ValueError("Invalid stock"), None]),
+        )
+        readable, errors = market.refresh_markets([healthy, flaky], 34.22)
+        self.assertEqual(readable, [healthy])
+        self.assertEqual(errors, ["Neverdin: Invalid stock"])
+
+        readable, errors = market.refresh_markets([healthy, flaky], 34.22)
+        self.assertEqual(readable, [healthy, flaky])
+        self.assertEqual(errors, [])
+
     def test_placeholder_slots_are_skipped_without_shifting_products(self):
         pm = SimpleNamespace(read_longlong=lambda address: 100)
         scanned_market = SimpleNamespace(pm=pm, base=0, limit=10)

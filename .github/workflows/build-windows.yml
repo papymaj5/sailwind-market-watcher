@@ -1,6 +1,12 @@
 name: Build Windows executable
 
 on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -20,17 +26,33 @@ jobs:
           python-version: "3.12"
           architecture: x64
 
+      - name: Install check tools
+        run: python -m pip install ruff pip-audit
+
+      - name: Lint and scan source
+        run: python -m ruff check .
+
+      - name: Check source formatting
+        run: python -m ruff format --check .
+
+      - name: Create isolated build environment
+        run: python -m venv .venv
+
       - name: Install build dependencies
-        run: python -m pip install -r requirements.txt "pyinstaller>=6,<7"
+        run: .venv/Scripts/python.exe -m pip install --upgrade pip -r requirements.txt "pyinstaller>=6,<7"
+
+      - name: Check build dependencies for known vulnerabilities
+        run: python -m pip_audit --strict --path .venv/Lib/site-packages
 
       - name: Run tests
-        run: python -m unittest discover -s tests -v
+        run: .venv/Scripts/python.exe -m unittest discover -s tests -v
 
       - name: Package Market Watcher
         run: >-
-          python -m PyInstaller --noconfirm --onefile --console
+          .venv/Scripts/python.exe -m PyInstaller --noconfirm --onefile --console
           --name SailwindMarketWatcher --icon boat.ico
-          --add-data "boat.ico:." --add-data "config.json:." main.py
+          --add-data "boat.ico:." --add-data "config.json:."
+          --add-data "pyproject.toml:." main.py
 
       - name: Check the packaged app starts without Sailwind installed
         shell: pwsh
@@ -51,3 +73,49 @@ jobs:
             dist/SailwindMarketWatcher.exe
             LICENSE
           if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: SailwindMarketWatcher-Windows-x64
+          path: release-files
+
+      - name: Publish Windows release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          tag="v$version"
+          release_flags=(--generate-notes --latest)
+
+          if [[ "$GITHUB_REF_NAME" != main ]]; then
+            tag="$tag-preview.$GITHUB_RUN_ID"
+            release_flags=(--prerelease --latest=false --notes "Build from $GITHUB_REF_NAME at $GITHUB_SHA.")
+          fi
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists. The build is available in this run's artifacts."
+            exit 0
+          fi
+
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>/dev/null; then
+            echo "::error::Tag $tag already exists without a release. Use a new version to publish this build."
+            exit 1
+          fi
+
+          archive="SailwindMarketWatcher-Windows-x64.zip"
+          zip -j "$archive" release-files/dist/SailwindMarketWatcher.exe release-files/LICENSE
+          gh release create "$tag" "$archive" --repo "$GITHUB_REPOSITORY" \
+            --title "$tag" --target "$GITHUB_SHA" "${release_flags[@]}"

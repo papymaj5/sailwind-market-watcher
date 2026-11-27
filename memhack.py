@@ -4,6 +4,27 @@ import pymem
 import pymem.process
 
 
+def open_read_only_process(name):
+    process = pymem.process.process_from_name(name, exact_match=True)
+    if process is None:
+        raise pymem.exception.ProcessNotFound(name)
+
+    access = pymem.ressources.structure.PROCESS
+    handle = pymem.process.open(
+        process.th32ProcessID,
+        debug=False,
+        process_access=access.PROCESS_QUERY_INFORMATION.value
+        | access.PROCESS_VM_READ.value,
+    )
+    if not handle:
+        raise pymem.exception.CouldNotOpenProcess(process.th32ProcessID)
+
+    reader = pymem.Pymem()
+    reader.process_id = process.th32ProcessID
+    reader.process_handle = handle
+    return reader
+
+
 def get_address(pm, chain):
     """
     Resolves a memory address by following a pointer chain.
@@ -36,7 +57,7 @@ def get_address(pm, chain):
         return None
 
 
-def read_game_memory(pm, address, data_type):
+def read_game_memory(pm, address, data_type, *, raise_on_error=False):
     """
     Reads a value from the specified memory address.
 
@@ -75,51 +96,10 @@ def read_game_memory(pm, address, data_type):
             )
 
     except Exception as e:
+        if raise_on_error:
+            raise
         print(f"Error reading memory: {e}")
         return None
-
-
-def write_game_memory(pm, address, data_type, value):
-    """
-    Writes a value to the specified memory address.
-
-    Args:
-        pm (pymem.Pymem): An instance of Pymem to interact with the process memory.
-        address (int): The memory address to write to.
-        data_type (str): The type of data to write. Supported types:
-            - 'int' (4-byte integer)
-            - 'float' (4-byte float)
-            - 'long' (4-byte integer)
-            - 'long long' (8-byte integer)
-            - 'BE_float' (4-byte big-endian float)
-            - 'BE_int' (4-byte big-endian integer)
-        value (int or float): The value to write.
-
-    Returns:
-        None
-    """
-    try:
-        if data_type == "int":
-            pm.write_int(address, value)  # 4-byte integer
-        elif data_type == "float":
-            pm.write_float(address, value)  # 4-byte float
-        elif data_type == "long":
-            pm.write_long(address, value)  # 4-byte integer
-        elif data_type == "long long":
-            pm.write_longlong(address, value)  # 8-byte integer
-        elif data_type == "BE_float":  # Big-endian float (4 bytes)
-            raw_data = struct.pack(">f", value)
-            pm.write_bytes(address, raw_data, len(raw_data))
-        elif data_type == "BE_int":  # Big-endian integer (4 bytes)
-            raw_data = struct.pack(">i", value)
-            pm.write_bytes(address, raw_data, len(raw_data))
-        else:
-            raise ValueError(
-                f"Unsupported data type specified for writing: {data_type}"
-            )
-
-    except Exception as e:
-        print(f"Error writing memory: {e}")
 
 
 def find_memory_address(pm, address):
