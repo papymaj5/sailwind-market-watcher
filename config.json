@@ -44,7 +44,15 @@
     },
     "player_settings": {
         "principal": 10000,
-        "conversion_rate": 34.22,
+        "currency": "Al'Ankh Lions",
+        "auto_rates": false,
+        "auto_balance": false,
+        "conversion_rates": {
+            "Al'Ankh Lions": 34.22,
+            "Aestrin Crowns": 82.0,
+            "Emerald Dragons": 330.0,
+            "Gold Lions": 1.0
+        },
         "mass_limit": 4000,
         "volume_limit": 120,
         "min_profit": 200

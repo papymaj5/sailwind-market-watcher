@@ -1,4 +1,5 @@
 import re
+import struct
 import sys
 import unittest
 from pathlib import Path
@@ -8,7 +9,15 @@ from unittest.mock import patch
 
 import market
 from memhack import open_read_only_process
-from settings import PLAYER_SETTINGS, load_player_settings, save_player_settings
+from save_economy import SavedGameEconomy, SaveEconomy, read_save_economy
+from settings import (
+    DEFAULT_CURRENCY,
+    GOLD_CURRENCY,
+    PLAYER_SETTINGS,
+    Player,
+    load_player_settings,
+    save_player_settings,
+)
 
 
 class PricingTests(unittest.TestCase):
@@ -197,7 +206,85 @@ class ScannerTests(unittest.TestCase):
         read.assert_called_once_with(None, 0, len(data))
 
 
+class SavedGameEconomyTests(unittest.TestCase):
+    def save_data(self, lions=0.21465273201465607, balance=1298):
+        return (
+            struct.pack("<Biiii", 0, 1, -1, 1, 0)
+            + struct.pack("<Bi", 12, 2)
+            + b"\x0fAssembly-CSharp"
+            + struct.pack("<Bi", 5, 1)
+            + b"\x0dSaveContainer"
+            + struct.pack("<i", 3)
+            + b"\x0fcurrentCurrency\x0eplayerCurrency\x0dcurrencyRates\x00\x07\x07\x08\x08\x0b"
+            + struct.pack("<iiBiBi", 2, 0, 9, 12, 9, 13)
+            + struct.pack("<BiiB4i", 15, 12, 4, 8, balance, 15, 23, 0)
+            + struct.pack(
+                "<BiiB4f", 15, 13, 4, 11, lions, 1.89633727, 0.49189484, 0.00585
+            )
+        )
+
+    def test_reads_exchange_quote_and_rejects_incomplete_save(self):
+        data = self.save_data()
+        economy = read_save_economy(data)
+        self.assertEqual(economy.rates["Al'Ankh Lions"], 36.32585)
+        self.assertEqual(
+            economy.balances,
+            {
+                "Al'Ankh Lions": 1298,
+                "Emerald Dragons": 15,
+                "Aestrin Crowns": 23,
+                "Gold Lions": 0,
+            },
+        )
+        with self.assertRaises(ValueError):
+            read_save_economy(data[:-1])
+
+    def test_refreshes_after_save_changes_and_avoids_ambiguous_slots(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            save = root / "slot0.save"
+            source = SavedGameEconomy(root)
+            save.write_bytes(self.save_data())
+            self.assertEqual(source.read()[0].rates["Al'Ankh Lions"], 36.32585)
+            save.write_bytes(self.save_data(lions=0.2, balance=500) + b"\x0b")
+            economy, _ = source.read()
+            self.assertNotEqual(economy.rates["Al'Ankh Lions"], 36.32585)
+            self.assertEqual(economy.balances["Al'Ankh Lions"], 500)
+            (root / "slot1.save").write_bytes(self.save_data())
+            self.assertEqual(source.read(), (SaveEconomy(), "Multiple saves found."))
+
+
 class SettingsTests(unittest.TestCase):
+    def test_gold_lion_rate_is_fixed(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "player-settings.json"
+            save_player_settings(
+                path,
+                {"currency": GOLD_CURRENCY, "conversion_rates": {GOLD_CURRENCY: 2}},
+            )
+            with patch("settings.PLAYER_SETTINGS_PATH", path):
+                player = Player()
+            self.assertEqual(player.currency, GOLD_CURRENCY)
+            self.assertEqual(player.conversion_rate, 1)
+
+    def test_currency_rates_and_selection_survive_restart(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "player-settings.json"
+            save_player_settings(path, {"conversion_rate": 36.32585})
+            with patch("settings.PLAYER_SETTINGS_PATH", path):
+                player = Player()
+                self.assertEqual(player.currency, DEFAULT_CURRENCY)
+                self.assertEqual(player.conversion_rate, 36.32585)
+
+                player.currency = "Aestrin Crowns"
+                player.conversion_rates[player.currency] = 83.5
+                save_player_settings(path, vars(player))
+                restored = Player()
+                self.assertEqual(restored.currency, "Aestrin Crowns")
+                self.assertEqual(restored.conversion_rate, 83.5)
+                restored.currency = DEFAULT_CURRENCY
+                self.assertEqual(restored.conversion_rate, 36.32585)
+
     def test_saved_settings_round_trip_and_corrupt_file_fallback(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "watcher" / "player-settings.json"
