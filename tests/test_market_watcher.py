@@ -164,7 +164,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_placeholder_slots_are_skipped_without_shifting_products(self):
         pm = SimpleNamespace(read_longlong=lambda address: 100)
-        scanned_market = SimpleNamespace(pm=pm, base=0, limit=10)
+        scanned_market = SimpleNamespace(pm=pm, base=0, limit=10, index=0)
         with patch("market.read_game_memory", return_value=30):
             products = market.Market._init_products(scanned_market)
 
@@ -175,6 +175,29 @@ class ScannerTests(unittest.TestCase):
             self.assertEqual(
                 product.supply_address, 100 + 0x24 + names.index(product.name) * 4
             )
+        self.assertEqual(names[61:], ["Coffee", "Salt", "Saffron"])
+
+    def test_exclusive_products_can_only_be_purchased_at_their_origin(self):
+        pm = SimpleNamespace(read_longlong=lambda address: 100)
+        for index in (0, 21, 22, 25, 33):
+            with (
+                self.subTest(port=index),
+                patch("market.read_game_memory", return_value=30),
+            ):
+                scanned_market = SimpleNamespace(pm=pm, base=0, limit=10, index=index)
+                products = {
+                    product.name: product
+                    for product in market.Market._init_products(scanned_market)
+                }
+                for (
+                    name,
+                    allowed_port,
+                ) in market.Products.EXCLUSIVE_PURCHASE_PORTS.items():
+                    self.assertEqual(
+                        products[name].amnt, 21 if index == allowed_port else 0
+                    )
+                    self.assertGreater(products[name].sell_price, 0)
+                self.assertEqual(products["Coffee"].amnt, 21)
 
     def test_anchored_search_matches_original_signature(self):
         signature = rb"..\x00\x00\x80\x3F\x00\x00.\x42.\x00\x00\x00\x6F\x12\x83\x3A\x00\x00\x80\x3F"
