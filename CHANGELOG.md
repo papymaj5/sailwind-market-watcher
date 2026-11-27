@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [v1.4.1]
+
+### Fixed
+
+- Align Coffee, Salt, and Saffron with their Sailwind 0.41 market slots.
+- Use standard-crate volume for Apples.
+- Respect the game's exclusive purchase ports for Venison, Truffles, Blue Tobacco, Rabbit Furs, and Saffron.
+
 ## [v1.4.0]
 
 ### Added

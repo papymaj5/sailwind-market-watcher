@@ -17,6 +17,7 @@ class Products:
     DATA = CONFIG["products"]
     NAMES = list(DATA.keys())
     PLACEHOLDER_NAMES = {"---", "---2"}
+    EXCLUSIVE_PURCHASE_PORTS = CONFIG["exclusive_purchase_ports"]
 
 
 class IslandGroups:
@@ -33,11 +34,12 @@ class IslandGroups:
 class Product:
     """Represents a product and its pricing/supply calculations."""
 
-    def __init__(self, name, supply_address, pm, limit):
+    def __init__(self, name, supply_address, pm, limit, *, can_buy=True):
         self.name = name
         self.supply_address = supply_address
         self.pm = pm
         self.limit = limit
+        self.can_buy = can_buy
         self.volume, self.weight, self.raw_price = Products.DATA[name]
         self.update_product()
 
@@ -47,7 +49,9 @@ class Product:
         )
         if not math.isfinite(self.supply):
             raise ValueError(f"{self.name} has invalid supply data.")
-        self.amnt = max(0, math.floor(self.supply - self.limit + 1))
+        self.amnt = (
+            max(0, math.floor(self.supply - self.limit + 1)) if self.can_buy else 0
+        )
         self.base_price = self.raw_price * conversion_rate
         self.sell_price = self.calc_sell_price(self.supply)
         self.buy_price = self.calc_buy_price(self.supply)
@@ -124,7 +128,14 @@ class Market:
         base_addr = self.pm.read_longlong(self.base + 0x20) + 0x24
         # Enumerate the game's slots before skipping placeholders to preserve offsets.
         return [
-            Product(name, base_addr + i * 4, self.pm, self.limit)
+            Product(
+                name,
+                base_addr + i * 4,
+                self.pm,
+                self.limit,
+                can_buy=Products.EXCLUSIVE_PURCHASE_PORTS.get(name, self.index)
+                == self.index,
+            )
             for i, name in enumerate(Products.NAMES)
             if name not in Products.PLACEHOLDER_NAMES
         ]
