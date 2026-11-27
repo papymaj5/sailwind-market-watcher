@@ -10,7 +10,9 @@ The watcher reads market stock from the running game and estimates prices and pr
 🚀 **How to Use**
 
 1. Launch Sailwind and load your save.
-2. Open the [Windows executable](#standalone-windows-executable) or double-click **Launch Market Watcher.bat** if you’re running from source.
+2. Start Market Watcher using either Windows launch option:
+   - **Windows executable:** Download the [release ZIP](#standalone-windows-executable), extract it, and double-click **SailwindMarketWatcher.exe**.
+   - **Batch launcher:** From the source folder, double-click **Launch Market Watcher.bat**. It sets up the Python dependencies on first launch and runs `python main.py` for you.
 3. Click **Initialize Markets** once per game session.
 4. In **Settings**, select your trading currency, enter your cargo limits, and click **Update Values**. Enter your current cash and exchange rate, or enable [saved cash and rates](#currency-conversion).
 5. Choose a **Departure port**. Open **Port Market** to check stock, **Trade Routes** to compare destinations, or **Cargo Plan** to plan a mixed load for one destination.
@@ -198,7 +200,7 @@ produce artifacts without publishing a release.
 
 Install Python 3.9 or newer, extract the project to a writable folder, and load your Sailwind save. Double-click **Launch Market Watcher.bat** in the project folder. The first launch needs internet access to install Pymem and Pillow into a local `.venv`. Later launches reuse that environment. The console stays open while the app runs so you can see scan timings and errors.
 
-### Run from PowerShell
+### Run from PowerShell (optional)
 
 To run from source without the double-click launcher, download the source ZIP
 from [this fork](https://github.com/papymaj5/sailwind-market-watcher) or clone
