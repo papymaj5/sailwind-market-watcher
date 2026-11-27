@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Select a trading currency and save a separate Gold Lion exchange rate for each regional currency.
+- Show estimates in Gold Lions using a fixed conversion rate of 1.
+- Optionally update regional exchange rates from a single Sailwind save slot.
+- Optionally use the selected currency's saved wallet balance as the trade and cargo budget.
+
 ## [v1.4.0]
 
 ### Added

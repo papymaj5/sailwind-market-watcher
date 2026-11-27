@@ -162,21 +162,25 @@ def calc_sell_price(supply, V):
 
 ---
 
-💱 **Currency Conversion** The game uses different currencies in different regions (Lions, Dragons, Crowns, etc). To calculate trades properly:
+### Currency conversion
 
-1. Visit a Currency Exchange port in the game
-2. Use the posted exchange rate to convert to Lions
-3. Enter that value into the app’s Conversion Rate field
+1. Open **Settings** and select the same **Currency** you use for trades in Sailwind.
+2. At a currency exchange, select **Gold Lions** under **Sell** and your trading currency under **Buy**.
+3. Enter the posted rate in **Per Gold Lion** and click **Update Values**. You can read the rate without exchanging money.
 
-💡 Estimated values shown in the app:
+The watcher remembers a separate rate for each currency. The defaults are
+34.22 Al’Ankh Lions, 82 Aestrin Crowns, and 330 Emerald Dragons per Gold Lion.
+Choose **Gold Lions** to express estimates in Gold Lions with a fixed rate of 1.
+Use the current in-game quote when available. When switching currencies, enter
+your corresponding balance in **Player Principal**.
 
-```
-Lions ≈ 34.0
-Dragons ≈ 330
-Crowns ≈ 82.0
-```
-
-Use the actual in-game rate when possible for best results.
+For a single local Sailwind 0.41 save slot, enable **Use exchange rates from
+save** in Settings. The watcher refreshes the rates after a save or autosave.
+If the save is unavailable or there are multiple slots, the watcher uses your
+manually saved rate. Turning the option off also restores your manual rate.
+Enable **Use cash balance from save** to use the selected currency's saved
+wallet balance for Trade Routes and Cargo Plan. It refreshes after a save or
+autosave and falls back to your manual budget if there is no unambiguous save.
 
 ---
 

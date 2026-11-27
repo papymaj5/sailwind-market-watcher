@@ -3,6 +3,7 @@
 import ctypes
 import math
 import tkinter as tk
+from copy import copy
 from datetime import datetime
 from queue import Empty, Queue
 from threading import Thread
@@ -18,9 +19,11 @@ from market import (
     scan_market_addresses,
 )
 from memhack import open_read_only_process
+from save_economy import SavedGameEconomy, SaveEconomy
 from settings import (
     APP_DIR,
     APP_VERSION,
+    GOLD_CURRENCY,
     PLAYER_SETTINGS_PATH,
     Player,
     save_player_settings,
@@ -171,6 +174,9 @@ def main():
     refresh_report = ["No refresh yet."]
     last_refresh = None
     readable_markets = []
+    saved_game_economy = SavedGameEconomy()
+    automatic_rate = None
+    automatic_balance = None
 
     def copy_diagnostics():
         root.clipboard_clear()
@@ -266,32 +272,92 @@ def main():
         root.after(100, finish_scan)
 
     def update_values(inputs, settings_status):
-        settings = vars(player).copy()
         try:
-            settings.update({key: float(var.get()) for key, var in inputs.items()})
-            if not all(map(math.isfinite, settings.values())):
+            changes = {key: float(var.get()) for key, var in inputs.items()}
+            if not all(map(math.isfinite, changes.values())):
                 raise ValueError
         except ValueError:
             settings_status.config(text="Enter a number in each field.")
             return
 
-        player.update(**settings)
+        rate = changes.pop("conversion_rate", None)
+        if automatic_balance is not None:
+            changes.pop("principal", None)
+        if (
+            rate is not None
+            and player.currency != GOLD_CURRENCY
+            and automatic_rate is None
+        ):
+            if rate <= 0:
+                settings_status.config(text="Enter a rate greater than zero.")
+                return
+            player.conversion_rates[player.currency] = rate
+        player.update(**(vars(player) | changes))
+        save_and_refresh(settings_status)
+
+    def save_and_refresh(settings_status):
         try:
-            save_player_settings(PLAYER_SETTINGS_PATH, settings)
+            save_player_settings(PLAYER_SETTINGS_PATH, vars(player))
         except OSError as error:
             settings_status.config(text="Applied for this session only.")
             print(f"Could not save player settings: {error}")
         else:
             settings_status.config(text="Saved.")
-        update_player_summary()
         refresh_market_data()
 
     def refresh_market_data():
-        nonlocal last_refresh, readable_markets
+        nonlocal last_refresh, readable_markets, automatic_rate, automatic_balance
+        previous_rate = automatic_rate
+        previous_balance = automatic_balance
+        economy, source = (
+            saved_game_economy.read()
+            if player.auto_rates or player.auto_balance
+            else (SaveEconomy(), "")
+        )
+        automatic_rate = (
+            economy.rates.get(player.currency) if player.auto_rates else None
+        )
+        automatic_balance = (
+            economy.balances.get(player.currency) if player.auto_balance else None
+        )
+        if automatic_balance is not None:
+            balance_source.config(text=f"Save balance · {source}")
+        elif player.auto_balance:
+            balance_source.config(text=f"Using manual balance. {source}")
+        else:
+            balance_source.config(text="")
+        principal_entry.configure(
+            state="readonly" if automatic_balance is not None else "normal"
+        )
+        if automatic_balance is not None or previous_balance is not None:
+            player_vars["principal"].set(budget())
+        if player.currency == GOLD_CURRENCY:
+            rate_source.config(text="Gold Lion rate is fixed at 1.")
+        elif automatic_rate is not None:
+            rate_source.config(text=f"Save rate · {source}")
+        elif player.auto_rates:
+            rate_source.config(text=f"Using manual rate. {source}")
+        else:
+            rate_source.config(text="")
+        rate_entry.configure(
+            state="readonly"
+            if automatic_rate is not None or player.currency == GOLD_CURRENCY
+            else "normal"
+        )
+        if (
+            automatic_rate is not None
+            or previous_rate is not None
+            or player.currency == GOLD_CURRENCY
+        ):
+            player_vars["conversion_rate"].set(automatic_rate or player.conversion_rate)
+        update_player_summary()
         if not markets:
             return
 
-        readable_markets, read_errors = refresh_markets(markets, player.conversion_rate)
+        readable_markets, read_errors = refresh_markets(
+            markets,
+            automatic_rate if automatic_rate is not None else player.conversion_rate,
+        )
         if readable_markets:
             last_refresh = datetime.now()
         time_label = (
@@ -312,8 +378,10 @@ def main():
         if origin_name == START_GROUPS_OPTION:
             origin_name = None
         active_tab = tabs.select()
+        planning_player = copy(player)
+        planning_player.principal = budget()
         if active_tab == str(routes_view):
-            routes_view.render(origin_name, readable_markets, player)
+            routes_view.render(origin_name, readable_markets, planning_player)
             return
 
         origin = next(
@@ -322,7 +390,9 @@ def main():
         if active_tab == str(port_view):
             port_view.render(origin_name, origin)
         elif active_tab == str(cargo_view):
-            cargo_view.render(origin_name, origin, markets, readable_markets, player)
+            cargo_view.render(
+                origin_name, origin, markets, readable_markets, planning_player
+            )
 
     def update_loop():
         refresh_market_data()
@@ -357,10 +427,15 @@ def main():
 
     configure_theme(root)
 
+    def budget():
+        return player.principal if automatic_balance is None else automatic_balance
+
     def update_player_summary():
+        cash_label = "Saved cash" if automatic_balance is not None else "Cash"
         player_summary.config(
             text=(
-                f"Cash {player.principal:,.8g}  ·  Weight {player.mass_limit:,.8g}  ·  Volume {player.volume_limit:,.8g}"
+                f"{cash_label} {budget():,.8g} {player.currency}  ·  "
+                f"Weight {player.mass_limit:,.8g}  ·  Volume {player.volume_limit:,.8g}"
             )
         )
 
@@ -432,8 +507,8 @@ def main():
         ("principal", "Player Principal:", "Available money in the selected currency."),
         (
             "conversion_rate",
-            "Conversion Rate:",
-            "Use the in-game exchange rate.\nLions ~34, Dragons ~330, Crowns ~82.",
+            "Per Gold Lion:",
+            "How many coins of the selected currency the exchange quotes for one Gold Lion.",
         ),
         (
             "mass_limit",
@@ -447,7 +522,7 @@ def main():
         ),
     )
     player_vars = {}
-    for column, (key, label, tooltip) in enumerate(player_fields):
+    for column, (key, label, tooltip) in enumerate(player_fields, start=1):
         variable = tk.StringVar(value=getattr(player, key))
         player_vars[key] = variable
         field_label = ttk.Label(player_frame, text=label)
@@ -456,15 +531,86 @@ def main():
         entry = ttk.Entry(player_frame, textvariable=variable, width=15)
         entry.grid(row=1, column=column, sticky="ew", padx=(0, 12), pady=(4, 0))
         create_tooltip(entry, tooltip)
+        if key == "conversion_rate":
+            rate_entry = entry
+        elif key == "principal":
+            principal_entry = entry
 
     player_status = ttk.Label(player_frame, text="", style="Muted.TLabel")
-    player_status.grid(row=2, column=0, columnspan=5, sticky="w")
+    player_status.grid(row=2, column=0, columnspan=6, sticky="w")
+    ttk.Label(player_frame, text="Currency:").grid(row=0, column=0, sticky="w")
+    currency_var = tk.StringVar(value=player.currency)
+    currency_picker = ttk.Combobox(
+        player_frame,
+        textvariable=currency_var,
+        values=tuple(player.conversion_rates),
+        state="readonly",
+        width=17,
+    )
+    currency_picker.grid(row=1, column=0, sticky="ew", padx=(0, 12), pady=(4, 0))
+    create_tooltip(
+        currency_picker,
+        "Select the currency used for market quotes. Check that Player Principal matches your balance in that currency.",
+    )
+
+    def show_currency_rate():
+        player_vars["conversion_rate"].set(player.conversion_rate)
+        rate_entry.configure(
+            state="readonly" if player.currency == GOLD_CURRENCY else "normal"
+        )
+
+    def change_currency(_event):
+        player.currency = currency_var.get()
+        show_currency_rate()
+        save_and_refresh(player_status)
+
+    currency_picker.bind("<<ComboboxSelected>>", change_currency)
+    show_currency_rate()
+    auto_rate_var = tk.BooleanVar(value=player.auto_rates)
+
+    def toggle_auto_rate():
+        player.auto_rates = auto_rate_var.get()
+        show_currency_rate()
+        save_and_refresh(player_status)
+
+    auto_rate_toggle = ttk.Checkbutton(
+        player_frame,
+        text="Use exchange rates from save",
+        variable=auto_rate_var,
+        command=toggle_auto_rate,
+    )
+    auto_rate_toggle.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+    create_tooltip(
+        auto_rate_toggle,
+        "Refresh rates after a save or autosave. Available when there is one Sailwind save slot.",
+    )
+    rate_source = ttk.Label(player_frame, style="Muted.TLabel")
+    rate_source.grid(row=3, column=2, columnspan=4, sticky="w", pady=(4, 0))
+    auto_balance_var = tk.BooleanVar(value=player.auto_balance)
+
+    def toggle_auto_balance():
+        player.auto_balance = auto_balance_var.get()
+        save_and_refresh(player_status)
+
+    auto_balance_toggle = ttk.Checkbutton(
+        player_frame,
+        text="Use cash balance from save",
+        variable=auto_balance_var,
+        command=toggle_auto_balance,
+    )
+    auto_balance_toggle.grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+    create_tooltip(
+        auto_balance_toggle,
+        "Use the selected currency's wallet balance after a save or autosave.",
+    )
+    balance_source = ttk.Label(player_frame, style="Muted.TLabel")
+    balance_source.grid(row=4, column=2, columnspan=4, sticky="w", pady=(4, 0))
     update_button = ttk.Button(
         player_frame,
         text="Update Values",
         command=lambda: update_values(player_vars, player_status),
     )
-    update_button.grid(row=1, column=4, sticky="w")
+    update_button.grid(row=1, column=5, sticky="w")
 
     tabs = ttk.Notebook(root)
     tabs.grid(row=2, column=0, sticky="nsew", padx=16, pady=(10, 0))
